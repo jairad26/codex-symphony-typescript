@@ -24,10 +24,22 @@ It does the boring orchestration work:
 
 ## Quick Start
 
+### Option 1. Ask Codex To Set It Up
+
+Give your coding agent this prompt:
+
+> Set up Codex Symphony for my repository based on https://github.com/jairad26/codex-symphony. Configure Linear, the target repo, safe concurrency, and the repo workflow prompt; start in dry-run or one-ticket mode, then run the validation checks.
+
+### Option 2. Manual Setup
+
 ```bash
-git clone <this-repo>
-cd codex-symphony
-cp .env.example .env.local
+git clone https://github.com/jairad26/codex-symphony.git && cd codex-symphony
+cp .env.example .env.local && $EDITOR .env.local WORKFLOW.md
+```
+
+```bash
+npm run validate -- --require-secrets
+npm run serve
 ```
 
 Edit `.env.local`:
