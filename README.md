@@ -93,6 +93,19 @@ The server prints a local URL. Visit:
 - Runs `codex exec --json`.
 - Marks an existing PR ready and optionally moves Linear to `In Review`.
 
+## Target Repo Workflow Contract
+
+Symphony is generic on purpose. Put repo-specific tribal knowledge in the target
+repo, then tell the Symphony prompt to read it.
+
+Recommended target repo files:
+
+- `AGENTS.md`: human-readable agent rules.
+- `agent.workflow.json`: machine-readable branch, PR, CI, review, and handoff policy.
+- `scripts/agent-workflow.js`: validates and prints the workflow contract.
+
+See `docs/WORKFLOW_CONTRACT.md` and `templates/` for starter files.
+
 ## Ticket Template
 
 Use a ticket shape like this for best results:

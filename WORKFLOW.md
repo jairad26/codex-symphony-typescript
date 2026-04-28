@@ -51,6 +51,7 @@ Linear ticket body:
 Use the repository workflow contract:
 
 - Read the repository's agent instructions first, such as `AGENTS.md`, `CLAUDE.md`, or local docs.
+- If the repo has `agent.workflow.json` or `scripts/agent-workflow.js`, use them as the source of truth for branch, PR, CI, review, and handoff rules.
 - Sync before feature work. If the repo uses Graphite, run `gt sync`.
 - Create a dedicated branch for the issue. If Graphite says the branch is untracked, run `gt track --parent <base-branch> --no-interactive`.
 - Open a ready-for-review PR. With Graphite, prefer `gt create --ai` and `gt submit --ai --publish`; if AI metadata fails because the diff is too large, use a concise manual title.
