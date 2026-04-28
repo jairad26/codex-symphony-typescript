@@ -52,8 +52,8 @@ claude_args=(-p "$(cat "$SYMPHONY_PROMPT_FILE")" --output-format "${CLAUDE_CODE_
 if [[ -n "${CLAUDE_CODE_MODEL:-}" ]]; then
 	claude_args+=(--model "$CLAUDE_CODE_MODEL")
 fi
-if [[ -n "${CLAUDE_CODE_PERMISSION_MODE:-acceptEdits}" ]]; then
-	claude_args+=(--permission-mode "${CLAUDE_CODE_PERMISSION_MODE:-acceptEdits}")
+if [[ -n "${CLAUDE_CODE_PERMISSION_MODE:-}" ]]; then
+	claude_args+=(--permission-mode "$CLAUDE_CODE_PERMISSION_MODE")
 fi
 
 (cd "$worktree_dir" && claude "${claude_args[@]}")

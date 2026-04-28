@@ -862,13 +862,14 @@ class AgentRunner {
 		if (!text) {
 			return;
 		}
-		const parsedEvent = this.adapter().parseLine(text, { sessionId, streamName });
+		const adapter = this.adapter();
+		const parsedEvent = adapter.parseLine(text, { sessionId, streamName });
 		if (parsedEvent) {
 			onEvent(parsedEvent);
 			return;
 		}
 		const outputEvent = { event: "agent_output", session_id: sessionId, stream: streamName, timestamp: new Date().toISOString(), text };
-		if (this.adapter().event_format === "plain") {
+		if (adapter.event_format === "plain") {
 			outputEvent.usage_delta = estimateOutputTokenUsageFromText(text);
 		}
 		onEvent(outputEvent);
