@@ -153,8 +153,8 @@ agent_runtime:
 Supported providers are:
 
 - `codex`: parses `codex exec --json` token/output events.
-- `opencode`: runs the configured command and tracks plain stdout/stderr unless you add a richer adapter.
-- `claude-code`: runs the configured command and tracks plain stdout/stderr unless you add a richer adapter.
+- `opencode`: runs OpenCode CLI through `scripts/symphony-opencode-run.sh`.
+- `claude-code`: runs Claude Code headless through `scripts/symphony-claude-run.sh`.
 - `cursor-cli`: runs Cursor Agent CLI via `cursor-agent` and tracks plain stdout/stderr.
 - `generic-cli`: runs any command that reads `SYMPHONY_PROMPT_FILE` or otherwise uses the environment Symphony provides.
 

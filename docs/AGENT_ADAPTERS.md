@@ -15,8 +15,8 @@ agent_runtime:
 ## Providers
 
 - `codex`: default. Parses `codex exec --json` JSONL events and token counts.
-- `opencode`: generic CLI supervision for OpenCode commands.
-- `claude-code`: generic CLI supervision for Claude Code commands.
+- `opencode`: OpenCode CLI supervision through `opencode run`.
+- `claude-code`: Claude Code headless supervision through `claude -p`.
 - `cursor-cli`: generic CLI supervision for Cursor Agent CLI commands.
 - `generic-cli`: any command that can read `SYMPHONY_PROMPT_FILE`.
 
@@ -41,6 +41,48 @@ agent_runtime:
 
 Set `CURSOR_AGENT_MODEL` in the environment to pass `--model` to
 `cursor-agent`.
+
+## OpenCode CLI
+
+OpenCode supports non-interactive runs with `opencode run "<prompt>"`. Symphony
+includes a wrapper that creates the target worktree, reads `SYMPHONY_PROMPT_FILE`,
+and invokes OpenCode from that worktree:
+
+```yaml
+agent_runtime:
+  provider: opencode
+  command: bash "$SYMPHONY_HOME/scripts/symphony-opencode-run.sh"
+  event_format: plain
+```
+
+Optional environment knobs:
+
+- `OPENCODE_MODEL`: passed as `--model`.
+- `OPENCODE_AGENT`: passed as `--agent`.
+- `OPENCODE_FORMAT`: passed as `--format` (`default` unless set).
+- `OPENCODE_SKIP_PERMISSIONS=false`: disables the default
+  `--dangerously-skip-permissions` automation flag.
+
+## Claude Code
+
+Claude Code supports headless runs with `claude -p "<query>"` and
+`--output-format text`. Symphony includes a wrapper that creates the target
+worktree, reads `SYMPHONY_PROMPT_FILE`, and invokes Claude Code from that
+worktree:
+
+```yaml
+agent_runtime:
+  provider: claude-code
+  command: bash "$SYMPHONY_HOME/scripts/symphony-claude-run.sh"
+  event_format: plain
+```
+
+Optional environment knobs:
+
+- `CLAUDE_CODE_MODEL`: passed as `--model`.
+- `CLAUDE_CODE_OUTPUT_FORMAT`: passed as `--output-format` (`text` unless set).
+- `CLAUDE_CODE_PERMISSION_MODE`: passed as `--permission-mode` (`acceptEdits`
+  unless set).
 
 ## Environment Contract
 

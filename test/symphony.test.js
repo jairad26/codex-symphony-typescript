@@ -175,6 +175,40 @@ agent_runtime:
 	}
 });
 
+test("supports OpenCode and Claude Code wrapper configs", () => {
+	const dir = tempDir();
+	try {
+		for (const [provider, command] of [
+			["opencode", 'bash "$SYMPHONY_HOME/scripts/symphony-opencode-run.sh"'],
+			["claude-code", 'bash "$SYMPHONY_HOME/scripts/symphony-claude-run.sh"']
+		]) {
+			const workflowPath = writeWorkflow(
+				dir,
+				`
+tracker:
+  kind: linear
+  api_key: $LINEAR_API_KEY
+  project_slug: orbit
+repository:
+  root: $TARGET_REPO_ROOT
+workspace:
+  root: tmp/symphony-${provider}
+agent_runtime:
+  provider: ${provider}
+  command: ${command}
+`
+			);
+			const config = loadConfig({ workflowPath, env: { LINEAR_API_KEY: "linear-token", TARGET_REPO_ROOT: dir } });
+
+			assert.equal(config.agent_runtime.provider, provider);
+			assert.equal(config.agent_runtime.event_format, "plain");
+			assert.deepEqual(validateDispatchConfig(config), []);
+		}
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("supports Cursor CLI as a plain-output adapter", () => {
 	const dir = tempDir();
 	try {
