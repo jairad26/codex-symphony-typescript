@@ -439,7 +439,6 @@ function flattenGitHubFeedbackPayload(payload) {
 function selectGitHubFeedbackSince(feedback, cutoffIso, limit = 20) {
 	const cutoff = Date.parse(cutoffIso || "") || 0;
 	return feedback
-		.map(normalizeGitHubFeedbackItem)
 		.filter((item) => item.body)
 		.filter((item) => {
 			if (!cutoff) return true;

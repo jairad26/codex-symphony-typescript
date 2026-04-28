@@ -160,6 +160,12 @@ test("selects GitHub PR feedback newer than the branch update", () => {
 		feedback.map((item) => item.body),
 		["new PR comment", "inline fix"]
 	);
+	assert.deepEqual(
+		feedback.map((item) => item.author),
+		["reviewer", "greptile"]
+	);
+	assert.match(formatGitHubFeedback(feedback), /reviewer/);
+	assert.match(formatGitHubFeedback(feedback), /greptile/);
 	assert.match(formatGitHubFeedback(feedback), /src\/file\.ts:12/);
 	assert.match(formatGitHubFeedback(feedback), /https:\/\/example\.test\/inline/);
 });
