@@ -1,0 +1,20 @@
+{
+  "name": "codex-symphony",
+  "version": "0.1.0",
+  "private": false,
+  "description": "A standalone Linear-to-Codex orchestration harness for running coding agents against real repositories.",
+  "bin": {
+    "codex-symphony": "scripts/symphony.js"
+  },
+  "scripts": {
+    "validate": "node scripts/symphony.js validate",
+    "config": "node scripts/symphony.js config",
+    "once": "node scripts/symphony.js once",
+    "serve": "node scripts/symphony.js serve",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
