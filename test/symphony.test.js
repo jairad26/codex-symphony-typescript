@@ -7,8 +7,10 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+	AgentRunner,
 	LinearTracker,
 	WorkspaceManager,
+	createAgentAdapter,
 	estimateTokenUsageFromText,
 	extractTokenUsage,
 	classifyLifecycleState,
@@ -28,7 +30,7 @@ const {
 } = require("../scripts/symphony.js");
 
 function tempDir() {
-	return fs.mkdtempSync(path.join(os.tmpdir(), "codex-symphony-test-"));
+	return fs.mkdtempSync(path.join(os.tmpdir(), "symphony-agent-test-"));
 }
 
 function writeWorkflow(dir, frontMatter, prompt = "Issue {{ issue.identifier }}: {{ issue.title }}") {
@@ -46,13 +48,16 @@ test("loads workflow config, resolves secrets, and validates", () => {
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
+  assignee_email: $SYMPHONY_ASSIGNEE_EMAIL
   project_slug: orbit
 repository:
   root: $TARGET_REPO_ROOT
 workspace:
   root: tmp/symphony
-codex:
+agent_runtime:
+  provider: codex
   command: symphony dry-run
+  event_format: codex-json
 `
 		);
 
@@ -65,10 +70,135 @@ codex:
 		});
 
 		assert.equal(config.tracker.api_key, "linear-token");
+		const configWithAssigneeDefault = loadConfig({
+			workflowPath,
+			env: {
+				LINEAR_API_KEY: "linear-token",
+				SYMPHONY_ASSIGNEE_EMAIL: "${SYMPHONY_ASSIGNEE_EMAIL:-jai@orbitsearch.com}",
+				TARGET_REPO_ROOT: dir
+			}
+		});
+		assert.equal(configWithAssigneeDefault.tracker.assignee_email, "jai@orbitsearch.com");
+		assert.equal(config.agent_runtime.provider, "codex");
+		assert.equal(config.agent_runtime.event_format, "codex-json");
 		assert.equal(config.repository.root, dir);
 		assert.match(config.workspace.root, /tmp\/symphony$/);
 		assert.deepEqual(validateDispatchConfig(config), []);
 		assert.match(validateDispatchConfig(loadConfig({ workflowPath, env: { TARGET_REPO_ROOT: dir } }), { requireSecrets: true }).join("\n"), /tracker\.api_key/);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("keeps legacy codex runtime config working", () => {
+	const dir = tempDir();
+	try {
+		const workflowPath = writeWorkflow(
+			dir,
+			`
+tracker:
+  kind: linear
+  api_key: $LINEAR_API_KEY
+  project_slug: orbit
+repository:
+  root: $TARGET_REPO_ROOT
+workspace:
+  root: tmp/symphony
+codex:
+  command: legacy codex command
+  stall_timeout_ms: 1234
+`
+		);
+		const config = loadConfig({ workflowPath, env: { LINEAR_API_KEY: "linear-token", TARGET_REPO_ROOT: dir } });
+
+		assert.equal(config.agent_runtime.provider, "codex");
+		assert.equal(config.agent_runtime.command, "legacy codex command");
+		assert.equal(config.agent_runtime.event_format, "codex-json");
+		assert.equal(config.agent_runtime.stall_timeout_ms, 1234);
+		assert.deepEqual(validateDispatchConfig(config), []);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("supports generic CLI-style agent adapters", () => {
+	const adapter = createAgentAdapter({ provider: "claude-code", event_format: "plain" });
+
+	assert.equal(adapter.provider, "claude-code");
+	assert.equal(adapter.event_format, "plain");
+	assert.equal(adapter.parseLine("plain output", { sessionId: "s1", streamName: "stdout" }), null);
+});
+
+test("plain adapters estimate output activity from stdout", () => {
+	const events = [];
+	const writes = [];
+	const runner = new AgentRunner({ agent_runtime: { provider: "generic-cli", event_format: "plain" } });
+
+	runner.handleChildOutputLine("abcd".repeat(4), {
+		logStream: { write: (value) => writes.push(value) },
+		sessionId: "s1",
+		streamName: "stdout",
+		onEvent: (event) => events.push(event)
+	});
+
+	assert.deepEqual(writes, [`${"abcd".repeat(4)}\n`]);
+	assert.equal(events[0].event, "agent_output");
+	assert.deepEqual(events[0].usage_delta, { input_tokens: 0, output_tokens: 4, total_tokens: 4 });
+});
+
+test("defaults non-Codex runtime adapters to plain output parsing", () => {
+	const dir = tempDir();
+	try {
+		const workflowPath = writeWorkflow(
+			dir,
+			`
+tracker:
+  kind: linear
+  api_key: $LINEAR_API_KEY
+  project_slug: orbit
+repository:
+  root: $TARGET_REPO_ROOT
+workspace:
+  root: tmp/symphony
+agent_runtime:
+  provider: opencode
+  command: opencode run --prompt-file "$SYMPHONY_PROMPT_FILE"
+`
+		);
+		const config = loadConfig({ workflowPath, env: { LINEAR_API_KEY: "linear-token", TARGET_REPO_ROOT: dir } });
+
+		assert.equal(config.agent_runtime.provider, "opencode");
+		assert.equal(config.agent_runtime.event_format, "plain");
+		assert.deepEqual(validateDispatchConfig(config), []);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("supports Cursor CLI as a plain-output adapter", () => {
+	const dir = tempDir();
+	try {
+		const workflowPath = writeWorkflow(
+			dir,
+			`
+tracker:
+  kind: linear
+  api_key: $LINEAR_API_KEY
+  project_slug: orbit
+repository:
+  root: $TARGET_REPO_ROOT
+workspace:
+  root: tmp/symphony
+agent_runtime:
+  provider: cursor-cli
+  command: bash "$SYMPHONY_HOME/scripts/symphony-cursor-run.sh"
+`
+		);
+		const config = loadConfig({ workflowPath, env: { LINEAR_API_KEY: "linear-token", TARGET_REPO_ROOT: dir } });
+
+		assert.equal(config.agent_runtime.provider, "cursor-cli");
+		assert.equal(config.agent_runtime.event_format, "plain");
+		assert.deepEqual(validateDispatchConfig(config), []);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
@@ -107,7 +237,7 @@ test("renders prompt variables strictly", () => {
 test("selects non-workpad Linear comments added after the latest workpad update", () => {
 	const comments = [
 		{ id: "old", body: "old instruction", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", user: { name: "Jai" } },
-		{ id: "workpad", body: "<!-- marker -->\n## Codex Workpad", createdAt: "2026-01-01T00:01:00.000Z", updatedAt: "2026-01-01T00:02:00.000Z" },
+		{ id: "workpad", body: "<!-- marker -->\n## Symphony Workpad", createdAt: "2026-01-01T00:01:00.000Z", updatedAt: "2026-01-01T00:02:00.000Z" },
 		{ id: "new", body: "do not send every fun fact to the LLM", createdAt: "2026-01-01T00:03:00.000Z", updatedAt: "2026-01-01T00:03:00.000Z", user: { name: "Jai" } }
 	];
 
@@ -259,7 +389,7 @@ test("Linear workpad comments are created or reused by marker", async () => {
 		}
 	);
 
-	const created = await tracker.ensureWorkpadComment("issue-1", "<!-- marker -->", "<!-- marker -->\n## Codex Workpad");
+	const created = await tracker.ensureWorkpadComment("issue-1", "<!-- marker -->", "<!-- marker -->\n## Symphony Workpad");
 	const updated = await tracker.ensureWorkpadComment("issue-1", "<!-- marker -->", "<!-- marker -->\nupdated");
 
 	assert.equal(created.id, "comment-1");
@@ -285,7 +415,7 @@ test("renders a durable workpad comment body", () => {
 	});
 
 	assert.match(body, /<!-- marker -->/);
-	assert.match(body, /## Codex Workpad/);
+	assert.match(body, /## Symphony Workpad/);
 	assert.match(body, /TASK-1 - Wire it/);
 	assert.match(body, /Tokens observed: 5 total/);
 });
@@ -313,14 +443,15 @@ test("classifies lifecycle states and renders the dashboard", () => {
 				tokens: { total_tokens: 42 },
 				workspace: { path: "/tmp/workspace" }
 			}
-		],
-		retrying: [],
-		codex_totals: { total_tokens: 42, seconds_running: 7 }
-	};
+			],
+			retrying: [],
+			agent_totals: { total_tokens: 42, seconds_running: 7 },
+			codex_totals: { total_tokens: 42, seconds_running: 7 }
+		};
 
 	assert.equal(classifyLifecycleState(config, "Human Review"), "human_review");
 	assert.equal(classifyLifecycleState(config, null, "retrying"), "rework");
-	assert.match(renderDashboard(snapshot), /Codex Symphony/);
+	assert.match(renderDashboard(snapshot), /Symphony Agent/);
 	assert.match(renderDashboard(snapshot), /TASK-1/);
 });
 

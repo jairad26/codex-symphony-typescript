@@ -1,7 +1,8 @@
 # Codex App Server
 
-Codex Symphony uses `codex exec --json` by default. That is enough for the
-common loop: Linear ticket in, isolated Codex run, PR ready for human merge.
+Symphony Agent's Codex adapter uses `codex exec --json` by default. That is
+enough for the common loop: Linear ticket in, isolated Codex run, PR ready for
+human merge.
 
 Codex also ships an experimental app-server:
 
@@ -37,8 +38,10 @@ protocol may change.
 The standalone harness is structured so the child command is configurable:
 
 ```yaml
-codex:
+agent_runtime:
+  provider: codex
   command: bash "$SYMPHONY_HOME/scripts/symphony-codex-run.sh"
+  event_format: codex-json
 ```
 
 That means an app-server runner can be added without changing Linear polling,

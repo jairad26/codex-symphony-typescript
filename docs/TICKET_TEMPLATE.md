@@ -11,7 +11,7 @@ Context:
 Links, examples, failing query, ids, logs, screenshots, current behavior.
 
 Env vars / secrets:
-Where Codex should pull required env vars/secrets from. Do not paste secrets.
+Where the agent should pull required env vars/secrets from. Do not paste secrets.
 
 Acceptance criteria:
 Concrete checklist for done.

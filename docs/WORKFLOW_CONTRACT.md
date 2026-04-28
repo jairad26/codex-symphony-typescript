@@ -1,7 +1,7 @@
 # Repository Workflow Contract
 
 Symphony is the orchestration layer. It decides which Linear ticket to run,
-creates a workspace, launches Codex, records logs, and handles the handoff.
+creates a workspace, launches the configured agent, records logs, and handles the handoff.
 
 The target repository still needs its own workflow contract. That contract is
 where you teach agents the repo's tribal knowledge:
@@ -19,13 +19,13 @@ This separation is the useful pattern:
 
 ```text
 Linear ticket
-  -> Codex Symphony
+  -> Symphony Agent
   -> WORKFLOW.md prompt
   -> target repo AGENTS.md / agent.workflow.json / scripts
   -> PR ready for human merge
 ```
 
-Symphony creates a persistent `## Codex Workpad` comment on each Linear issue
+Symphony creates a persistent `## Symphony Workpad` comment on each Linear issue
 when `tracker.workpad.enabled` is true. The orchestrator keeps basic status
 fresh there. If your agent has Linear tools, teach it to update the same comment
 with plan, validation, review feedback, and handoff notes.
@@ -56,7 +56,7 @@ Workflow:
 8. Hand off with PR URL, checks, tests, and risk.
 ```
 
-Then make the prompt in `WORKFLOW.md` tell Codex to read it:
+Then make the prompt in `WORKFLOW.md` tell the agent to read it:
 
 ```md
 Use the repository workflow contract:
@@ -184,6 +184,10 @@ Review:
 - On rework runs, inspect GitHub feedback added after the latest branch update;
   Symphony injects it into `{{ issue.recent_github_comments }}` when an existing
   workspace PR is available.
+- After pushing review-comment fixes, retrigger the configured review bot if the
+  repo has one, then wait for a fresh review on the latest head before handoff.
+  Do this at most 3 times per PR; if comments remain after that, stop and
+  summarize the unresolved feedback.
 - Prefer any consolidated "fix all" comment when your reviewer provides one.
 - Ignore comments already addressed by your latest patch.
 - Rerun focused tests after fixing comments.

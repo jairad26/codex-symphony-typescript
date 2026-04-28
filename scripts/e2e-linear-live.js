@@ -16,9 +16,9 @@ if (missing.length > 0) {
 }
 
 const runCodex = process.env.LINEAR_E2E_RUN_CODEX === "true";
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-symphony-e2e-"));
-const title = `Codex Symphony E2E ${new Date().toISOString()}`;
-const description = "Created by codex-symphony live E2E. Safe to close/delete.";
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "symphony-agent-e2e-"));
+const title = `Symphony Agent E2E ${new Date().toISOString()}`;
+const description = "Created by symphony-agent live E2E. Safe to close/delete.";
 
 async function graphql(query, variables) {
 	const tracker = new LinearTracker({

@@ -20,7 +20,7 @@ const DEFAULTS = {
 		timeout_ms: 30000,
 		workpad: {
 			enabled: true,
-			marker: "<!-- codex-symphony-workpad -->"
+			marker: "<!-- symphony-agent-workpad -->"
 		}
 	},
 	polling: { interval_ms: 30000 },
@@ -38,6 +38,14 @@ const DEFAULTS = {
 		max_turns: 20,
 		max_retry_backoff_ms: 300000,
 		max_concurrent_agents_by_state: {}
+	},
+	agent_runtime: {
+		provider: "codex",
+		command: "codex app-server",
+		event_format: "codex-json",
+		turn_timeout_ms: 3600000,
+		read_timeout_ms: 5000,
+		stall_timeout_ms: 300000
 	},
 	lifecycle: {
 		todo_states: ["Todo"],
@@ -182,9 +190,19 @@ function readWorkflowFile(file = defaultWorkflowPath) {
 
 function resolveSecret(value, env = process.env) {
 	if (typeof value === "string" && value.startsWith("$")) {
-		return env[value.slice(1)];
+		const resolved = env[value.slice(1)];
+		return expandEnvValue(resolved, env);
 	}
-	return value;
+	return expandEnvValue(value, env);
+}
+
+function expandEnvValue(value, env = process.env) {
+	if (typeof value !== "string") {
+		return value;
+	}
+	return value
+		.replace(/^\$\{([A-Za-z_][A-Za-z0-9_]*):-([^}]*)\}$/, (match, name, fallback) => (env[name] && env[name] !== match ? env[name] : fallback))
+		.replace(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/, (_match, name) => env[name] || "");
 }
 
 function parseEnvFile(text) {
@@ -240,12 +258,41 @@ function resolvePath(value, baseDir = root, env = process.env) {
 function loadConfig({ workflowPath = defaultWorkflowPath, env = loadLocalEnv() } = {}) {
 	const workflowFile = readWorkflowFile(workflowPath);
 	const config = deepMerge(DEFAULTS, workflowFile.frontMatter);
+	config.agent_runtime = normalizeAgentRuntimeConfig(config, workflowFile.frontMatter);
 	config.tracker.api_key = resolveSecret(config.tracker.api_key || "$LINEAR_API_KEY", env);
+	config.tracker.assignee_email = resolveSecret(config.tracker.assignee_email, env);
 	config.repository.root = resolvePath(config.repository.root, path.dirname(workflowFile.path), env);
 	config.workspace.root = resolvePath(config.workspace.root, path.dirname(workflowFile.path), env);
 	config.workflow_path = workflowFile.path;
 	config.prompt_template = workflowFile.promptTemplate;
 	return config;
+}
+
+function normalizeAgentRuntimeConfig(config, frontMatter = {}) {
+	const legacyCodex = frontMatter.codex;
+	if (!frontMatter.agent_runtime && legacyCodex) {
+		return {
+			...DEFAULTS.agent_runtime,
+			provider: "codex",
+			event_format: "codex-json",
+			...legacyCodex
+		};
+	}
+	const runtime = config.agent_runtime || {};
+	const provider = runtime.provider || "generic-cli";
+	const eventFormat =
+		frontMatter.agent_runtime && !Object.prototype.hasOwnProperty.call(frontMatter.agent_runtime, "event_format")
+			? defaultEventFormatForProvider(provider)
+			: runtime.event_format || defaultEventFormatForProvider(provider);
+	return {
+		...runtime,
+		provider,
+		event_format: eventFormat
+	};
+}
+
+function defaultEventFormatForProvider(provider) {
+	return provider === "codex" ? "codex-json" : "plain";
 }
 
 function validateDispatchConfig(config, options = {}) {
@@ -278,8 +325,14 @@ function validateDispatchConfig(config, options = {}) {
 			failures.push(`tracker.state_transitions.${key} must be a Linear state id string`);
 		}
 	}
-	if (!config.codex?.command) {
-		failures.push("codex.command must be set");
+	if (!config.agent_runtime?.command) {
+		failures.push("agent_runtime.command must be set");
+	}
+	if (!["codex", "opencode", "claude-code", "cursor-cli", "generic-cli"].includes(config.agent_runtime?.provider)) {
+		failures.push("agent_runtime.provider must be one of codex, opencode, claude-code, cursor-cli, generic-cli");
+	}
+	if (!["codex-json", "plain"].includes(config.agent_runtime?.event_format)) {
+		failures.push("agent_runtime.event_format must be one of codex-json, plain");
 	}
 	if (!Number.isInteger(config.polling?.interval_ms) || config.polling.interval_ms < 1) {
 		failures.push("polling.interval_ms must be a positive integer");
@@ -353,7 +406,7 @@ function normalizeIssueComment(comment) {
 
 function isWorkpadComment(comment, marker) {
 	const body = String(comment.body || "");
-	return body.includes(marker) || body.includes("## Codex Workpad");
+	return body.includes(marker) || body.includes("## Symphony Workpad") || body.includes("## Codex Workpad");
 }
 
 function selectPromptComments(comments, marker) {
@@ -781,6 +834,10 @@ class AgentRunner {
 		this.children = new Set();
 	}
 
+	adapter() {
+		return createAgentAdapter(this.config.agent_runtime || this.config.codex || DEFAULTS.agent_runtime);
+	}
+
 	pipeChildOutput(stream, { logStream, sessionId, streamName, onEvent }) {
 		stream.setEncoding("utf8");
 		let buffered = "";
@@ -805,19 +862,24 @@ class AgentRunner {
 		if (!text) {
 			return;
 		}
-		const parsedEvent = parseCodexJsonEvent(text, { sessionId, streamName });
+		const parsedEvent = this.adapter().parseLine(text, { sessionId, streamName });
 		if (parsedEvent) {
 			onEvent(parsedEvent);
 			return;
 		}
-		onEvent({ event: "agent_output", session_id: sessionId, stream: streamName, timestamp: new Date().toISOString(), text });
+		const outputEvent = { event: "agent_output", session_id: sessionId, stream: streamName, timestamp: new Date().toISOString(), text };
+		if (this.adapter().event_format === "plain") {
+			outputEvent.usage_delta = estimateOutputTokenUsageFromText(text);
+		}
+		onEvent(outputEvent);
 	}
 
 	async run({ issue, workspacePath, prompt, attempt, onEvent }) {
 		if (!workspacePath || !path.isAbsolute(path.resolve(workspacePath))) {
 			throw Object.assign(new Error("agent workspace path must be absolute"), { status: "Failed" });
 		}
-		const command = this.config.codex.command;
+		const runtime = this.config.agent_runtime || this.config.codex || DEFAULTS.agent_runtime;
+		const command = runtime.command;
 		const sessionId = `${issue.identifier}-${Date.now()}`;
 		onEvent({ event: "session_started", session_id: sessionId, timestamp: new Date().toISOString() });
 		if (command === "symphony dry-run") {
@@ -837,6 +899,8 @@ class AgentRunner {
 					...process.env,
 					SYMPHONY_PROMPT_FILE: promptFile,
 					SYMPHONY_HOME: root,
+					SYMPHONY_AGENT_PROVIDER: runtime.provider || "generic-cli",
+					SYMPHONY_AGENT_EVENT_FORMAT: runtime.event_format || defaultEventFormatForProvider(runtime.provider || "generic-cli"),
 					SYMPHONY_REPO_ROOT: this.config.repository.root,
 					SYMPHONY_TARGET_REPO_ROOT: this.config.repository.root,
 					SYMPHONY_BASE_BRANCH: this.config.repository.base_branch || DEFAULTS.repository.base_branch,
@@ -861,7 +925,7 @@ class AgentRunner {
 				child.kill("SIGTERM");
 				logStream.end();
 				reject(Object.assign(new Error("agent turn timed out"), { status: "TimedOut" }));
-			}, this.config.codex.turn_timeout_ms || DEFAULTS.codex.turn_timeout_ms);
+			}, runtime.turn_timeout_ms || DEFAULTS.agent_runtime.turn_timeout_ms);
 			child.on("error", (error) => {
 				this.children.delete(child);
 				clearTimeout(timeout);
@@ -890,6 +954,21 @@ class AgentRunner {
 			}
 		}
 	}
+}
+
+function createAgentAdapter(runtime = {}) {
+	const provider = runtime.provider || "generic-cli";
+	const eventFormat = runtime.event_format || defaultEventFormatForProvider(provider);
+	return {
+		provider,
+		event_format: eventFormat,
+		parseLine(line, context) {
+			if (eventFormat === "codex-json") {
+				return parseCodexJsonEvent(line, context);
+			}
+			return null;
+		}
+	};
 }
 
 function sortCandidates(issues) {
@@ -933,7 +1012,8 @@ class SymphonyOrchestrator {
 		this.claimed = new Set();
 		this.retryAttempts = new Map();
 		this.events = [];
-		this.codexTotals = { input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0 };
+		this.agentTotals = { input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0 };
+		this.codexTotals = this.agentTotals;
 		this.rateLimits = null;
 		this.lastError = null;
 	}
@@ -1231,7 +1311,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
 			phase: "PreparingWorkspace",
 			started_at_ms: startedAt,
 			started_at: new Date(startedAt).toISOString(),
-			last_codex_timestamp_ms: null,
+			last_agent_timestamp_ms: null,
 			last_event: "started",
 			last_message: "",
 			turn_count: 0,
@@ -1278,7 +1358,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
 			} catch (error) {
 				this.log("hook_failed_ignored", { hook: "after_run", issue_id: issue.id, issue_identifier: issue.identifier, error: error.message });
 			}
-			this.codexTotals.seconds_running += (this.now() - startedAt) / 1000;
+			this.agentTotals.seconds_running += (this.now() - startedAt) / 1000;
 			this.running.delete(issue.id);
 		}
 	}
@@ -1377,12 +1457,12 @@ query($owner: String!, $repo: String!, $number: Int!) {
 	}
 
 	detectStalls() {
-		const stallTimeout = this.config.codex.stall_timeout_ms;
+		const stallTimeout = (this.config.agent_runtime || this.config.codex || DEFAULTS.agent_runtime).stall_timeout_ms;
 		if (!stallTimeout || stallTimeout <= 0) {
 			return;
 		}
 		for (const [issueId, entry] of this.running.entries()) {
-			const basis = entry.last_codex_timestamp_ms || entry.started_at_ms;
+			const basis = entry.last_agent_timestamp_ms || entry.started_at_ms;
 			if (this.now() - basis > stallTimeout) {
 				this.running.delete(issueId);
 				this.scheduleRetry(entry.issue, (entry.attempt || 0) + 1, "stalled");
@@ -1395,7 +1475,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
 		const entry = this.running.get(issueId);
 		const timestampMs = Date.parse(event.timestamp || new Date().toISOString()) || this.now();
 		if (entry) {
-			entry.last_codex_timestamp_ms = timestampMs;
+			entry.last_agent_timestamp_ms = timestampMs;
 			entry.last_event = event.event;
 			entry.last_message = event.message || "";
 			entry.session_id = event.session_id || entry.session_id;
@@ -1428,9 +1508,9 @@ query($owner: String!, $repo: String!, $number: Int!) {
 	}
 
 	addTokenTotals(tokens) {
-		this.codexTotals.input_tokens += tokens.input_tokens;
-		this.codexTotals.output_tokens += tokens.output_tokens;
-		this.codexTotals.total_tokens += tokens.total_tokens;
+		this.agentTotals.input_tokens += tokens.input_tokens;
+		this.agentTotals.output_tokens += tokens.output_tokens;
+		this.agentTotals.total_tokens += tokens.total_tokens;
 	}
 
 	log(event, fields = {}) {
@@ -1449,7 +1529,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
 			last_event: entry.last_event,
 			last_message: entry.last_message,
 			started_at: entry.started_at,
-			last_event_at: entry.last_codex_timestamp_ms ? new Date(entry.last_codex_timestamp_ms).toISOString() : null,
+			last_event_at: entry.last_agent_timestamp_ms ? new Date(entry.last_agent_timestamp_ms).toISOString() : null,
 			tokens: entry.tokens,
 			workspace: entry.workspace
 		}));
@@ -1468,7 +1548,12 @@ query($owner: String!, $repo: String!, $number: Int!) {
 			lifecycle_counts: countBy([...running, ...retrying], "lifecycle"),
 			running,
 			retrying,
-			codex_totals: { ...this.codexTotals, seconds_running: this.codexTotals.seconds_running + activeSeconds },
+			agent_runtime: {
+				provider: (this.config.agent_runtime || this.config.codex || DEFAULTS.agent_runtime).provider || "codex",
+				event_format: (this.config.agent_runtime || this.config.codex || DEFAULTS.agent_runtime).event_format || "codex-json"
+			},
+			agent_totals: { ...this.agentTotals, seconds_running: this.agentTotals.seconds_running + activeSeconds },
+			codex_totals: { ...this.agentTotals, seconds_running: this.agentTotals.seconds_running + activeSeconds },
 			rate_limits: this.rateLimits,
 			last_error: this.lastError
 		};
@@ -1502,7 +1587,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
 						started_at: running.started_at,
 						last_event: running.last_event,
 						last_message: running.last_message,
-						last_event_at: running.last_codex_timestamp_ms ? new Date(running.last_codex_timestamp_ms).toISOString() : null,
+						last_event_at: running.last_agent_timestamp_ms ? new Date(running.last_agent_timestamp_ms).toISOString() : null,
 						tokens: running.tokens
 					}
 				: null,
@@ -1544,7 +1629,7 @@ function renderWorkpadComment({ marker, issue, entry, status, note = "", generat
 	const tokens = entry.tokens || { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
 	const attemptText = entry.attempt == null ? "initial" : String(entry.attempt);
 	return `${marker}
-## Codex Workpad
+## Symphony Workpad
 
 ### Status
 - Issue: ${issue.identifier} - ${issue.title}
@@ -1638,7 +1723,7 @@ function renderDashboard(snapshot) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="10">
-<title>Codex Symphony</title>
+<title>Symphony Agent</title>
 <style>
 :root {
 	color-scheme: dark;
@@ -1740,6 +1825,11 @@ pre { max-height: 420px; overflow: auto; margin: 10px 0 0; padding: 12px; backgr
 function estimateTokenUsageFromText(text) {
 	const tokenCount = Math.ceil(String(text || "").length / 4);
 	return { input_tokens: tokenCount, output_tokens: 0, total_tokens: tokenCount };
+}
+
+function estimateOutputTokenUsageFromText(text) {
+	const tokenCount = Math.ceil(String(text || "").length / 4);
+	return { input_tokens: 0, output_tokens: tokenCount, total_tokens: tokenCount };
 }
 
 function parseCodexJsonEvent(line, { sessionId, streamName }) {
@@ -1974,6 +2064,7 @@ module.exports = {
 	LinearTracker,
 	SymphonyOrchestrator,
 	WorkspaceManager,
+	createAgentAdapter,
 	extractTokenUsage,
 	loadConfig,
 	loadLocalEnv,

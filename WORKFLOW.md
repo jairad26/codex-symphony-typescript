@@ -12,7 +12,7 @@ tracker:
     on_pr_open_state_id: ""
   workpad:
     enabled: true
-    marker: "<!-- codex-symphony-workpad -->"
+    marker: "<!-- symphony-agent-workpad -->"
 polling:
   interval_ms: 30000
 repository:
@@ -38,8 +38,10 @@ lifecycle:
   rework_states: ["Rework"]
   merging_states: ["Merging"]
   done_states: ["Done", "Closed"]
-codex:
+agent_runtime:
+  provider: codex
   command: bash "$SYMPHONY_HOME/scripts/symphony-codex-run.sh"
+  event_format: codex-json
   approval_policy: never
   thread_sandbox: workspace-write
   turn_sandbox_policy: workspace-write
@@ -70,12 +72,13 @@ Use the repository workflow contract:
 
 - Read the repository's agent instructions first, such as `AGENTS.md`, `CLAUDE.md`, or local docs.
 - If the repo has `agent.workflow.json` or `scripts/agent-workflow.js`, use them as the source of truth for branch, PR, CI, review, and handoff rules.
-- Use the existing `## Codex Workpad` Linear comment as the persistent progress scratchpad when Linear tools are available.
+- Use the existing `## Symphony Workpad` Linear comment as the persistent progress scratchpad when Linear tools are available.
 - Sync before feature work. If the repo uses Graphite, run `gt sync`.
 - Create a dedicated branch for the issue. If Graphite says the branch is untracked, run `gt track --parent <base-branch> --no-interactive`.
 - Open a ready-for-review PR. With Graphite, prefer `gt create --ai` and `gt submit --ai --publish`; if AI metadata fails because the diff is too large, use a concise manual title.
 - Wait for CI/review automation to finish before deciding there are no comments. Read review comments even when CI is green.
 - Address actionable review comments, rerun relevant local checks, and stop before merge.
+- After pushing review-comment fixes, retrigger the configured review bot if the repo has one, then wait for the fresh review on the latest head before handoff. Do this at most 3 times per PR; if comments remain after that, stop and summarize the unresolved feedback.
 - Before handoff, self-review your own diff for correctness, tests, and performance. Include `Self Review` with alternatives/tradeoffs considered and `Performance Evidence` with measured numbers, added query fan-out/network/database calls, or a clear explanation for why no benchmark was needed.
 - Keep changes scoped to this Linear issue. If the ticket is missing essential context, make the smallest safe discovery pass and explain what is blocked.
 - Include the PR URL, check status, local verification, and residual risk in your final response.

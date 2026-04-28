@@ -1,39 +1,39 @@
-# Codex Symphony TypeScript
+# Symphony Agent TypeScript
 
-Codex Symphony TypeScript is a small, standalone TypeScript/Node.js implementation of the Symphony pattern: turning Linear tickets into Codex coding-agent runs against a real git repository.
+Symphony Agent TypeScript is a small, standalone TypeScript/Node.js implementation of the Symphony pattern: turning Linear tickets into coding-agent runs against a real git repository. Codex is the default adapter, but the runner can also supervise OpenCode, Claude Code, Cursor CLI, or any generic CLI agent command.
 
 It does the boring orchestration work:
 
 - Polls Linear for candidate issues.
 - Creates isolated per-ticket workspaces.
-- Runs `codex exec` with a rendered issue prompt.
+- Runs a configured agent adapter command with a rendered issue prompt.
 - Streams child-agent output into `agent-run.log`.
 - Tracks running/retry state through a local JSON API.
 - Serves a local dashboard for running, retrying, lifecycle, and token activity.
 - Optionally moves Linear tickets to `In Progress` and `In Review`.
-- Maintains one persistent `## Codex Workpad` Linear comment per issue.
+- Maintains one persistent `## Symphony Workpad` Linear comment per issue.
 - Creates/reuses git worktrees and leaves PRs ready for human merge.
 
 ## Requirements
 
 - Node.js 20+
 - A Linear API key
-- The Codex CLI on your `PATH`
+- A CLI coding agent on your `PATH` (`codex` by default, or another configured adapter)
 - Git and GitHub CLI for PR handoff
 - Optional: Graphite CLI if your repo uses Graphite
 
 ## Quick Start
 
-### Option 1. Ask Codex To Set It Up
+### Option 1. Ask An Agent To Set It Up
 
 Give your coding agent this prompt:
 
-> Set up Codex Symphony TypeScript for my repository based on https://github.com/jairad26/codex-symphony-typescript. Configure Linear, the target repo, safe concurrency, and the repo workflow prompt; start in dry-run or one-ticket mode, then run the validation checks.
+> Set up Symphony Agent TypeScript for my repository based on https://github.com/jairad26/symphony-agent-typescript. Configure Linear, the target repo, safe concurrency, and the repo workflow prompt; start in dry-run or one-ticket mode, then run the validation checks.
 
 ### Option 2. Manual Setup
 
 ```bash
-git clone https://github.com/jairad26/codex-symphony-typescript.git && cd codex-symphony-typescript
+git clone https://github.com/jairad26/symphony-agent-typescript.git && cd symphony-agent-typescript
 cp .env.example .env.local && $EDITOR .env.local WORKFLOW.md
 ```
 
@@ -59,7 +59,10 @@ Edit `WORKFLOW.md`:
 - `repository.root`: target git repository.
 - `repository.base_branch`: usually `main` or `develop`.
 - `workspace.root`: where per-ticket workspaces live.
-- Prompt body: the actual instructions the child Codex agent receives.
+- `agent_runtime.provider`: `codex`, `opencode`, `claude-code`, `cursor-cli`, or `generic-cli`.
+- `agent_runtime.command`: command Symphony runs for each ticket.
+- `agent_runtime.event_format`: `codex-json` for Codex JSONL, or `plain` for generic stdout/stderr tracking.
+- Prompt body: the actual instructions the child agent receives.
 
 Validate:
 
@@ -106,8 +109,8 @@ like:
 Symphony is the orchestration layer above that foundation. It does not replace
 the target repo's harness; it relies on it. Symphony decides which Linear ticket
 to run, creates an isolated workspace, renders the ticket plus recent Linear
-comments and recent GitHub PR feedback into a prompt, starts Codex, tracks
-logs/tokens/status, updates the Linear workpad, and leaves the PR ready for
+comments and recent GitHub PR feedback into a prompt, starts the child agent, tracks
+logs/tokens/status when the adapter exposes token events, updates the Linear workpad, and leaves the PR ready for
 human review or merge according to the repo's own workflow contract.
 
 The useful mental model is:
@@ -118,7 +121,7 @@ Symphony = route Linear work into those harnessed repos and supervise the runs.
 ```
 
 This repository is the TypeScript Symphony runner. The target repositories still
-need their own harness files so the child Codex agent knows how to build, test,
+need their own harness files so the child agent knows how to build, test,
 open PRs, handle review comments, and stop at the right handoff point.
 
 ## How It Works
@@ -133,12 +136,29 @@ open PRs, handle review comments, and stop at the right handoff point.
   the last Symphony workpad update.
 - Pulls recent GitHub PR comments/reviews from an existing workspace PR,
   preferring feedback added after the branch's latest update.
-- Creates or updates the issue's persistent `## Codex Workpad` comment.
+- Creates or updates the issue's persistent `## Symphony Workpad` comment.
 - Creates a per-issue workspace under `workspace.root`.
 - Renders the prompt with `{{ issue.* }}` variables.
-- Runs the configured child command and records output.
+- Runs the configured child command through an adapter and records output.
 
-`scripts/symphony-codex-run.sh` is the default child command:
+`agent_runtime` selects the child runtime:
+
+```yaml
+agent_runtime:
+  provider: codex
+  command: bash "$SYMPHONY_HOME/scripts/symphony-codex-run.sh"
+  event_format: codex-json
+```
+
+Supported providers are:
+
+- `codex`: parses `codex exec --json` token/output events.
+- `opencode`: runs the configured command and tracks plain stdout/stderr unless you add a richer adapter.
+- `claude-code`: runs the configured command and tracks plain stdout/stderr unless you add a richer adapter.
+- `cursor-cli`: runs Cursor Agent CLI via `cursor-agent` and tracks plain stdout/stderr.
+- `generic-cli`: runs any command that reads `SYMPHONY_PROMPT_FILE` or otherwise uses the environment Symphony provides.
+
+`scripts/symphony-codex-run.sh` is the default Codex child command:
 
 - Creates or reuses a git worktree for the target repo.
 - Links `node_modules` and the configured env file when present.
@@ -156,12 +176,15 @@ Recommended target repo files:
 - `AGENTS.md`: human-readable agent rules.
 - `agent.workflow.json`: machine-readable branch, PR, CI, review, and handoff policy.
 - `scripts/agent-workflow.js`: validates and prints the workflow contract.
+- Review-bot retrigger rules: when to ask automation for a fresh review after
+  addressing comments, including a maximum retrigger count per PR.
 - Self-review/performance rules: what the agent must inspect in its own diff
   before handoff, including alternatives considered, measured numbers, and
   added query fan-out or network/database calls.
 
 See `docs/WORKFLOW_CONTRACT.md` and `templates/` for starter files.
-See `docs/CODEX_APP_SERVER.md` for why `codex exec --json` is the default
+See `docs/AGENT_ADAPTERS.md` for non-Codex adapter examples. See
+`docs/CODEX_APP_SERVER.md` for why `codex exec --json` is the default Codex
 transport and when app-server is worth adding.
 
 ## Ticket Template
@@ -179,7 +202,7 @@ Context:
 Links, examples, failing query, ids, logs, screenshots, current behavior.
 
 Env vars / secrets:
-Where Codex should pull required env vars/secrets from. Do not paste secrets.
+Where the agent should pull required env vars/secrets from. Do not paste secrets.
 
 Acceptance criteria:
 Concrete checklist for done.
@@ -195,7 +218,7 @@ What not to change, rollout notes, risk areas.
 
 You can stop and restart Symphony. It re-reads Linear, reuses existing workspaces, cleans terminal-ticket workspaces, and retries active work according to the current config.
 
-Running child `codex exec` processes do not survive shutdown. A restart means reconcile and relaunch as needed, not resume the exact same OS process.
+Running child agent processes do not survive shutdown. A restart means reconcile and relaunch as needed, not resume the exact same OS process.
 
 ## Safety Defaults
 

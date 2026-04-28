@@ -1,16 +1,16 @@
 # Operating Model
 
-Codex Symphony is meant to make agent runs boring and inspectable.
+Symphony Agent is meant to make agent runs boring and inspectable.
 
 ## Lifecycle
 
 1. Poll Linear for active issues in one project.
 2. Filter by assignee, state, blockers, and concurrency.
 3. Move the issue to a dispatch state when configured.
-4. Create or update the persistent `## Codex Workpad` Linear comment.
+4. Create or update the persistent `## Symphony Workpad` Linear comment.
 5. Create a workspace and target-repo worktree.
 6. Render the issue prompt.
-7. Run `codex exec`.
+7. Run the configured agent adapter command.
 8. Stream logs and state to the local server.
 9. If a PR exists, mark it ready and optionally move Linear to review.
 10. Stop before merge.
@@ -31,7 +31,7 @@ Symphony knows what it directly observes:
 The Node implementation does not use Elixir/OTP. Instead it provides a small
 supervision layer around child processes:
 
-- child `codex exec` processes are tracked by the runner
+- child agent processes are tracked by the runner
 - turn timeouts terminate stuck children
 - `SIGINT`/`SIGTERM` shut down polling and terminate active children
 - active Linear issues are reconciled and retried on restart
