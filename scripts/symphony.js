@@ -1384,26 +1384,57 @@ ${note ? `- Latest note: ${note}` : "- Latest note: none"}
 }
 
 function renderDashboard(snapshot) {
+	const generatedAtMs = Date.parse(snapshot.generated_at) || Date.now();
+	const formatNumber = (value) => Math.round(Number(value) || 0).toLocaleString();
+	const formatDuration = (seconds) => {
+		const total = Math.max(0, Math.round(Number(seconds) || 0));
+		const hours = Math.floor(total / 3600);
+		const minutes = Math.floor((total % 3600) / 60);
+		const remainingSeconds = total % 60;
+		if (hours > 0) return `${hours}h ${minutes}m ${remainingSeconds}s`;
+		if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
+		return `${remainingSeconds}s`;
+	};
+	const ageFor = (isoTimestamp) => {
+		const startedAtMs = Date.parse(isoTimestamp || "");
+		if (!startedAtMs) return "n/a";
+		return formatDuration((generatedAtMs - startedAtMs) / 1000);
+	};
+	const truncate = (value, length) => {
+		const text = String(value || "");
+		return text.length <= length ? text : `${text.slice(0, Math.max(0, length - 1))}...`;
+	};
+	const shortSession = (value) => {
+		const text = String(value || "pending");
+		return text.length <= 12 ? text : `${text.slice(0, 6)}...${text.slice(-4)}`;
+	};
+	const throughput = snapshot.codex_totals.seconds_running > 0 ? (snapshot.codex_totals.total_tokens || 0) / snapshot.codex_totals.seconds_running : 0;
+	const lifecycleCounts = Object.entries(snapshot.lifecycle_counts || {})
+		.map(([key, value]) => `${key} ${value}`)
+		.join(" / ");
+	const rateLimits = snapshot.rate_limits ? JSON.stringify(snapshot.rate_limits) : "n/a";
 	const runningRows = snapshot.running
 		.map(
 			(issue) => `<tr>
-<td><a href="/api/v1/${encodeURIComponent(issue.issue_identifier)}">${escapeHtml(issue.issue_identifier)}</a></td>
-<td>${escapeHtml(issue.state)}</td>
-<td><span class="pill">${escapeHtml(issue.lifecycle)}</span></td>
-<td>${escapeHtml(issue.last_event || "")}</td>
-<td>${Math.round(issue.tokens?.total_tokens || 0).toLocaleString()}</td>
-<td>${escapeHtml(issue.workspace?.path || "")}</td>
+<td><span class="bullet"></span><a href="/api/v1/${encodeURIComponent(issue.issue_identifier)}">${escapeHtml(issue.issue_identifier)}</a></td>
+<td>${escapeHtml(issue.state || "unknown")}</td>
+<td>${escapeHtml(issue.lifecycle || "observed")}</td>
+<td>${escapeHtml(ageFor(issue.started_at))} / ${escapeHtml(issue.turn_count ?? 0)}</td>
+<td class="num">${formatNumber(issue.tokens?.total_tokens || 0)}</td>
+<td>${escapeHtml(shortSession(issue.session_id))}</td>
+<td title="${escapeHtml(issue.last_message || issue.last_event || "")}">${escapeHtml(truncate(issue.last_message || issue.last_event || "", 62))}</td>
+<td title="${escapeHtml(issue.workspace?.path || "")}">${escapeHtml(truncate(issue.workspace?.path || "", 42))}</td>
 </tr>`
 		)
 		.join("");
 	const retryRows = snapshot.retrying
 		.map(
 			(issue) => `<tr>
-<td>${escapeHtml(issue.issue_identifier)}</td>
-<td><span class="pill warn">${escapeHtml(issue.lifecycle)}</span></td>
-<td>${issue.attempt}</td>
+<td><span class="bullet warn-dot"></span>${escapeHtml(issue.issue_identifier)}</td>
+<td>${escapeHtml(issue.lifecycle)}</td>
+<td class="num">${issue.attempt}</td>
 <td>${escapeHtml(issue.due_at)}</td>
-<td>${escapeHtml(issue.error || "")}</td>
+<td title="${escapeHtml(issue.error || "")}">${escapeHtml(truncate(issue.error || "", 78))}</td>
 </tr>`
 		)
 		.join("");
@@ -1415,39 +1446,98 @@ function renderDashboard(snapshot) {
 <meta http-equiv="refresh" content="10">
 <title>Codex Symphony</title>
 <style>
-:root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-body { margin: 0; background: Canvas; color: CanvasText; }
-main { max-width: 1180px; margin: 0 auto; padding: 28px; }
-h1 { margin: 0 0 6px; font-size: 28px; }
-h2 { margin-top: 28px; font-size: 18px; }
-.muted { color: color-mix(in srgb, CanvasText 62%, Canvas); }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 20px 0; }
-.metric { border: 1px solid color-mix(in srgb, CanvasText 15%, Canvas); border-radius: 8px; padding: 14px; }
-.metric strong { display: block; font-size: 26px; }
-.pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, #3b82f6 18%, Canvas); }
-.warn { background: color-mix(in srgb, #f59e0b 24%, Canvas); }
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 10px; border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, Canvas); vertical-align: top; }
-code, pre { white-space: pre-wrap; }
-a { color: #2563eb; }
+:root {
+	color-scheme: dark;
+	font-family: "Berkeley Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+	--bg: #252932;
+	--panel: #20242c;
+	--line: #87909b;
+	--muted: #7d8591;
+	--text: #e7ecf2;
+	--blue: #a8c7e8;
+	--gold: #f5d36c;
+	--green: #9ad9b5;
+	--red: #f2a6a6;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-size: 13px; letter-spacing: 0; }
+main { width: 100%; max-width: 1280px; margin: 0; padding: 12px 10px 18px; }
+.console { min-height: calc(100vh - 24px); border-left: 1px solid var(--text); border-bottom: 1px solid var(--text); padding: 0 0 0 8px; }
+.title { display: inline-block; padding: 0 8px; margin: -1px 0 8px -1px; color: #ffffff; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; background: var(--bg); }
+.status-grid { display: grid; grid-template-columns: max-content 1fr; column-gap: 8px; row-gap: 2px; max-width: 980px; }
+.label { color: #ffffff; font-weight: 700; }
+.value { color: var(--blue); overflow-wrap: anywhere; }
+.value strong { color: var(--gold); font-weight: 700; }
+.ok { color: var(--green); }
+.warn { color: var(--red); }
+.muted { color: var(--muted); }
+.section { margin-top: 18px; }
+.section-title { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; color: #ffffff; font-weight: 700; }
+.section-title:before { content: ""; display: inline-block; width: 10px; height: 1px; background: #ffffff; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; min-width: 1040px; border-collapse: collapse; table-layout: fixed; }
+th, td { padding: 4px 8px; text-align: left; vertical-align: top; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+th { color: var(--muted); font-weight: 400; text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid var(--line); }
+td { color: var(--blue); }
+td.num { color: var(--gold); text-align: right; }
+th:nth-child(1), td:nth-child(1) { width: 108px; }
+th:nth-child(2), td:nth-child(2) { width: 126px; }
+th:nth-child(3), td:nth-child(3) { width: 116px; }
+th:nth-child(4), td:nth-child(4) { width: 92px; }
+th:nth-child(5), td:nth-child(5) { width: 112px; }
+th:nth-child(6), td:nth-child(6) { width: 128px; }
+th:nth-child(7), td:nth-child(7) { width: 360px; }
+th:nth-child(8), td:nth-child(8) { width: 300px; }
+a { color: var(--blue); text-decoration: none; }
+a:hover { color: #ffffff; text-decoration: underline; }
+.bullet { display: inline-block; width: 5px; height: 5px; margin-right: 8px; border-radius: 50%; background: var(--blue); vertical-align: 1px; }
+.warn-dot { background: var(--red); }
+.empty { padding: 16px 8px; color: var(--muted); }
+details { margin-top: 18px; }
+summary { cursor: pointer; color: var(--muted); }
+pre { max-height: 420px; overflow: auto; margin: 10px 0 0; padding: 12px; background: var(--panel); border: 1px solid #3b414c; color: var(--blue); white-space: pre-wrap; }
+@media (max-width: 720px) {
+	body { font-size: 12px; }
+	main { padding: 8px; }
+	.status-grid { grid-template-columns: 1fr; row-gap: 4px; }
+	.value { margin-bottom: 6px; }
+}
 </style>
 </head>
 <body>
 <main>
-<h1>Codex Symphony</h1>
-<div class="muted">Generated ${escapeHtml(snapshot.generated_at)}. Auto-refreshes every 10 seconds.</div>
-<section class="grid">
-<div class="metric"><span>Running</span><strong>${snapshot.counts.running}</strong></div>
-<div class="metric"><span>Retrying</span><strong>${snapshot.counts.retrying}</strong></div>
-<div class="metric"><span>Observed Tokens</span><strong>${Math.round(snapshot.codex_totals.total_tokens || 0).toLocaleString()}</strong></div>
-<div class="metric"><span>Seconds Running</span><strong>${Math.round(snapshot.codex_totals.seconds_running || 0).toLocaleString()}</strong></div>
+<div class="console">
+<div class="title">Symphony Status</div>
+<div class="status-grid">
+<div class="label">Agents:</div><div class="value"><strong>${snapshot.counts.running}</strong> running / <strong>${snapshot.counts.running + snapshot.counts.retrying}</strong> tracked</div>
+<div class="label">Throughput:</div><div class="value"><strong>${throughput.toLocaleString(undefined, { maximumFractionDigits: 1 })}</strong> tps</div>
+<div class="label">Runtime:</div><div class="value">${escapeHtml(formatDuration(snapshot.codex_totals.seconds_running || 0))}</div>
+<div class="label">Tokens:</div><div class="value">in <strong>${formatNumber(snapshot.codex_totals.input_tokens || 0)}</strong> | out <strong>${formatNumber(snapshot.codex_totals.output_tokens || 0)}</strong> | total <strong>${formatNumber(snapshot.codex_totals.total_tokens || 0)}</strong></div>
+<div class="label">Rate limits:</div><div class="value">${escapeHtml(rateLimits)}</div>
+<div class="label">Lifecycle:</div><div class="value">${escapeHtml(lifecycleCounts || "n/a")}</div>
+<div class="label">Last error:</div><div class="value ${snapshot.last_error ? "warn" : "ok"}">${escapeHtml(snapshot.last_error || "none")}</div>
+<div class="label">Generated:</div><div class="value">${escapeHtml(snapshot.generated_at)} | next refresh in 10s</div>
+</div>
+
+<section class="section">
+<div class="section-title">Running</div>
+<div class="table-wrap">
+<table><thead><tr><th>ID</th><th>Stage</th><th>Lifecycle</th><th>Age / Turn</th><th>Tokens</th><th>Session</th><th>Event</th><th>Workspace</th></tr></thead><tbody>${runningRows || '<tr><td colspan="8" class="empty">No running agents</td></tr>'}</tbody></table>
+</div>
 </section>
-<h2>Running</h2>
-<table><thead><tr><th>Issue</th><th>Linear State</th><th>Lifecycle</th><th>Last Event</th><th>Tokens</th><th>Workspace</th></tr></thead><tbody>${runningRows || '<tr><td colspan="6" class="muted">No running issues.</td></tr>'}</tbody></table>
-<h2>Retrying</h2>
-<table><thead><tr><th>Issue</th><th>Lifecycle</th><th>Attempt</th><th>Due</th><th>Error</th></tr></thead><tbody>${retryRows || '<tr><td colspan="5" class="muted">No retries scheduled.</td></tr>'}</tbody></table>
-<h2>Raw State</h2>
+
+<section class="section">
+<div class="section-title">Backoff Queue</div>
+<div class="table-wrap">
+<table><thead><tr><th>ID</th><th>Lifecycle</th><th>Attempt</th><th>Due</th><th colspan="4">Error</th></tr></thead><tbody>${retryRows || '<tr><td colspan="8" class="empty">No queued retries</td></tr>'}</tbody></table>
+</div>
+</section>
+
+<details>
+<summary>Raw JSON state</summary>
 <pre>${escapeHtml(JSON.stringify(snapshot, null, 2))}</pre>
+</details>
+</div>
 </main>
 </body>
 </html>`;
