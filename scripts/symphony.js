@@ -329,6 +329,8 @@ function normalizeIssue(issue) {
 		blocked_by: Array.isArray(blockedBy) ? blockedBy : [],
 		comments: Array.isArray(issue.comments) ? issue.comments : [],
 		recent_comments: issue.recent_comments || "",
+		github_comments: Array.isArray(issue.github_comments) ? issue.github_comments : [],
+		recent_github_comments: issue.recent_github_comments || "",
 		raw: issue
 	};
 }
@@ -382,6 +384,82 @@ function formatPromptComments(comments) {
 			const author = comment.author?.name || comment.author?.email || "Unknown";
 			const timestamp = comment.updated_at || comment.created_at || "unknown time";
 			return `Comment ${index + 1} (${author}, ${timestamp}):\n${comment.body}`;
+		})
+		.join("\n\n---\n\n");
+}
+
+function normalizeGitHubAuthor(author) {
+	if (!author) return "Unknown";
+	return author.login || author.name || author.email || "Unknown";
+}
+
+function normalizeGitHubFeedbackItem(item) {
+	return {
+		type: item.type || "comment",
+		body: String(item.body || "").trim(),
+		author: normalizeGitHubAuthor(item.author),
+		created_at: item.created_at || item.createdAt || item.submittedAt || null,
+		updated_at: item.updated_at || item.updatedAt || item.submittedAt || item.created_at || item.createdAt || null,
+		url: item.url || "",
+		path: item.path || "",
+		line: item.line || null,
+		state: item.state || ""
+	};
+}
+
+function flattenGitHubFeedbackPayload(payload) {
+	const pullRequest = payload?.data?.repository?.pullRequest || payload?.repository?.pullRequest || payload?.pullRequest || {};
+	const feedback = [];
+	for (const comment of pullRequest.comments?.nodes || []) {
+		feedback.push(normalizeGitHubFeedbackItem({ ...comment, type: "pr_comment" }));
+	}
+	for (const review of pullRequest.reviews?.nodes || []) {
+		if (review.body) {
+			feedback.push(
+				normalizeGitHubFeedbackItem({
+					...review,
+					type: "review",
+					created_at: review.submittedAt,
+					updated_at: review.updatedAt || review.submittedAt
+				})
+			);
+		}
+		for (const comment of review.comments?.nodes || []) {
+			feedback.push(
+				normalizeGitHubFeedbackItem({
+					...comment,
+					type: "review_comment"
+				})
+			);
+		}
+	}
+	return feedback.filter((item) => item.body);
+}
+
+function selectGitHubFeedbackSince(feedback, cutoffIso, limit = 20) {
+	const cutoff = Date.parse(cutoffIso || "") || 0;
+	return feedback
+		.map(normalizeGitHubFeedbackItem)
+		.filter((item) => item.body)
+		.filter((item) => {
+			if (!cutoff) return true;
+			const timestamp = Date.parse(item.updated_at || item.created_at || "") || 0;
+			return timestamp > cutoff;
+		})
+		.sort(compareCommentTime)
+		.slice(-limit);
+}
+
+function formatGitHubFeedback(feedback) {
+	if (!feedback.length) {
+		return "No GitHub PR comments found since the last branch update.";
+	}
+	return feedback
+		.map((item, index) => {
+			const timestamp = item.updated_at || item.created_at || "unknown time";
+			const location = item.path ? ` ${item.path}${item.line ? `:${item.line}` : ""}` : "";
+			const url = item.url ? `\n${item.url}` : "";
+			return `GitHub ${index + 1} (${item.type}${location}, ${item.author}, ${timestamp}):${url}\n${item.body}`;
 		})
 		.join("\n\n---\n\n");
 }
@@ -1028,6 +1106,121 @@ class SymphonyOrchestrator {
 		}
 	}
 
+	repoPathForWorkspace(workspace) {
+		const candidate = path.join(workspace.path, "repo");
+		if (fs.existsSync(path.join(candidate, ".git"))) {
+			return candidate;
+		}
+		return null;
+	}
+
+	readGitHubFeedbackCutoff(repoPath) {
+		return childProcess
+			.execFileSync("git", ["log", "-1", "--format=%cI", "HEAD"], {
+				cwd: repoPath,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"]
+			})
+			.trim();
+	}
+
+	fetchGitHubPullRequestFeedback(repoPath) {
+		const pr = JSON.parse(
+			childProcess.execFileSync("gh", ["pr", "view", "--json", "number,url,headRefName"], {
+				cwd: repoPath,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"]
+			})
+		);
+		const repo = JSON.parse(
+			childProcess.execFileSync("gh", ["repo", "view", "--json", "owner,name"], {
+				cwd: repoPath,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"]
+			})
+		);
+		const query = `
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      comments(first: 100) {
+        nodes {
+          body
+          createdAt
+          updatedAt
+          url
+          author { login }
+        }
+      }
+      reviews(first: 100) {
+        nodes {
+          body
+          submittedAt
+          updatedAt
+          state
+          url
+          author { login }
+          comments(first: 100) {
+            nodes {
+              body
+              createdAt
+              updatedAt
+              url
+              path
+              line
+              author { login }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+		const owner = repo.owner?.login || repo.owner?.name || repo.owner;
+		const payload = JSON.parse(
+			childProcess.execFileSync("gh", ["api", "graphql", "-f", `query=${query}`, "-F", `owner=${owner}`, "-F", `repo=${repo.name}`, "-F", `number=${pr.number}`], {
+				cwd: repoPath,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"]
+			})
+		);
+		return {
+			pr,
+			feedback: flattenGitHubFeedbackPayload(payload)
+		};
+	}
+
+	attachGitHubPromptComments(issue, workspace) {
+		const repoPath = this.repoPathForWorkspace(workspace);
+		if (!repoPath) {
+			return { ...issue, github_comments: [], recent_github_comments: formatGitHubFeedback([]) };
+		}
+		try {
+			const cutoff = this.readGitHubFeedbackCutoff(repoPath);
+			const { pr, feedback } = this.fetchGitHubPullRequestFeedback(repoPath);
+			const promptComments = selectGitHubFeedbackSince(feedback, cutoff);
+			this.log("github_prompt_comments_loaded", {
+				issue_id: issue.id,
+				issue_identifier: issue.identifier,
+				pr: pr.number,
+				cutoff,
+				count: promptComments.length
+			});
+			return {
+				...issue,
+				github_comments: promptComments,
+				recent_github_comments: formatGitHubFeedback(promptComments)
+			};
+		} catch (error) {
+			this.log("github_prompt_comments_failed", { issue_id: issue.id, issue_identifier: issue.identifier, error: error.message });
+			return {
+				...issue,
+				github_comments: [],
+				recent_github_comments: `Unable to load GitHub PR comments for this run: ${error.message}`
+			};
+		}
+	}
+
 	async dispatchIssue(issue, attempt = null) {
 		this.claimed.add(issue.id);
 		issue = await this.transitionIssueState(issue, "on_dispatch", this.config.tracker.state_transitions?.on_dispatch_state_id);
@@ -1053,6 +1246,8 @@ class SymphonyOrchestrator {
 		try {
 			await this.updateWorkpad(runningEntry, "Preparing workspace");
 			runningEntry.workspace = this.workspaceManager.prepare(issue);
+			issue = this.attachGitHubPromptComments(issue, runningEntry.workspace);
+			runningEntry.issue = issue;
 			runningEntry.phase = "BuildingPrompt";
 			const prompt = renderPrompt(this.config.prompt_template, { issue, attempt });
 			runningEntry.phase = "LaunchingAgentProcess";
@@ -1789,6 +1984,9 @@ module.exports = {
 	parseCodexJsonEvent,
 	selectPromptComments,
 	formatPromptComments,
+	flattenGitHubFeedbackPayload,
+	selectGitHubFeedbackSince,
+	formatGitHubFeedback,
 	renderWorkpadComment,
 	renderDashboard,
 	classifyLifecycleState,

@@ -62,6 +62,10 @@ Recent Linear comments since the last Symphony workpad update:
 
 {{ issue.recent_comments }}
 
+Recent GitHub PR comments since the last branch update:
+
+{{ issue.recent_github_comments }}
+
 Use the repository workflow contract:
 
 - Read the repository's agent instructions first, such as `AGENTS.md`, `CLAUDE.md`, or local docs.

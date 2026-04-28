@@ -177,6 +177,9 @@ Review:
 - Do not treat green CI as proof that review comments are absent.
 - Wait for review automation to finish.
 - Read PR comments and reviews.
+- On rework runs, inspect GitHub feedback added after the latest branch update;
+  Symphony injects it into `{{ issue.recent_github_comments }}` when an existing
+  workspace PR is available.
 - Prefer any consolidated "fix all" comment when your reviewer provides one.
 - Ignore comments already addressed by your latest patch.
 - Rerun focused tests after fixing comments.

@@ -106,9 +106,9 @@ like:
 Symphony is the orchestration layer above that foundation. It does not replace
 the target repo's harness; it relies on it. Symphony decides which Linear ticket
 to run, creates an isolated workspace, renders the ticket plus recent Linear
-comments into a prompt, starts Codex, tracks logs/tokens/status, updates the
-Linear workpad, and leaves the PR ready for human review or merge according to
-the repo's own workflow contract.
+comments and recent GitHub PR feedback into a prompt, starts Codex, tracks
+logs/tokens/status, updates the Linear workpad, and leaves the PR ready for
+human review or merge according to the repo's own workflow contract.
 
 The useful mental model is:
 
@@ -131,6 +131,8 @@ open PRs, handle review comments, and stop at the right handoff point.
 - Applies assignment, state, blocker, concurrency, and retry rules.
 - Pulls recent Linear comments into the prompt, preferring comments added after
   the last Symphony workpad update.
+- Pulls recent GitHub PR comments/reviews from an existing workspace PR,
+  preferring feedback added after the branch's latest update.
 - Creates or updates the issue's persistent `## Codex Workpad` comment.
 - Creates a per-issue workspace under `workspace.root`.
 - Renders the prompt with `{{ issue.* }}` variables.

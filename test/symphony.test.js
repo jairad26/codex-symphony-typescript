@@ -12,11 +12,14 @@ const {
 	estimateTokenUsageFromText,
 	extractTokenUsage,
 	classifyLifecycleState,
+	flattenGitHubFeedbackPayload,
+	formatGitHubFeedback,
 	loadConfig,
 	loadLocalEnv,
 	normalizeIssue,
 	parseCodexJsonEvent,
 	parseEnvFile,
+	selectGitHubFeedbackSince,
 	selectPromptComments,
 	renderDashboard,
 	renderWorkpadComment,
@@ -96,6 +99,7 @@ test("renders prompt variables strictly", () => {
 	assert.equal(renderPrompt("Do {{ issue.identifier }}: {{ issue.title }}", { issue }), "Do TASK-1: Wire it");
 	assert.equal(renderPrompt("Body: {{ issue.description }}", { issue }), "Body: Ticket body");
 	assert.equal(renderPrompt("Comments: {{ issue.recent_comments }}", { issue: { ...issue, recent_comments: "Use the ES match list." } }), "Comments: Use the ES match list.");
+	assert.equal(renderPrompt("GitHub: {{ issue.recent_github_comments }}", { issue: { ...issue, recent_github_comments: "Address the review comment." } }), "GitHub: Address the review comment.");
 	assert.throws(() => renderPrompt("{{ issue.missing }}", { issue }), /unknown prompt variable/);
 	assert.throws(() => renderPrompt("{{ issue.title | upcase }}", { issue }), /unsupported prompt filter/);
 });
@@ -111,6 +115,53 @@ test("selects non-workpad Linear comments added after the latest workpad update"
 		selectPromptComments(comments, "<!-- marker -->").map((comment) => comment.id),
 		["new"]
 	);
+});
+
+test("selects GitHub PR feedback newer than the branch update", () => {
+	const payload = {
+		data: {
+			repository: {
+				pullRequest: {
+					comments: {
+						nodes: [
+							{ body: "old comment", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", author: { login: "reviewer" }, url: "https://example.test/old" },
+							{ body: "new PR comment", createdAt: "2026-01-01T00:04:00.000Z", updatedAt: "2026-01-01T00:04:00.000Z", author: { login: "reviewer" }, url: "https://example.test/new" }
+						]
+					},
+					reviews: {
+						nodes: [
+							{
+								body: "",
+								submittedAt: "2026-01-01T00:05:00.000Z",
+								author: { login: "greptile" },
+								comments: {
+									nodes: [
+										{
+											body: "inline fix",
+											path: "src/file.ts",
+											line: 12,
+											createdAt: "2026-01-01T00:05:00.000Z",
+											updatedAt: "2026-01-01T00:05:00.000Z",
+											author: { login: "greptile" },
+											url: "https://example.test/inline"
+										}
+									]
+								}
+							}
+						]
+					}
+				}
+			}
+		}
+	};
+
+	const feedback = selectGitHubFeedbackSince(flattenGitHubFeedbackPayload(payload), "2026-01-01T00:03:00.000Z");
+	assert.deepEqual(
+		feedback.map((item) => item.body),
+		["new PR comment", "inline fix"]
+	);
+	assert.match(formatGitHubFeedback(feedback), /src\/file\.ts:12/);
+	assert.match(formatGitHubFeedback(feedback), /https:\/\/example\.test\/inline/);
 });
 
 test("keeps workspaces inside the workspace root", () => {
