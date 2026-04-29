@@ -46,6 +46,7 @@ fi
 
 codex exec \
 	--cd "$worktree_dir" \
+	--disable fast_mode \
 	--dangerously-bypass-approvals-and-sandbox \
 	--json \
 	--output-last-message "$output_file" \
