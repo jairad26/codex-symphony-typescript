@@ -44,7 +44,25 @@ if command -v gt >/dev/null 2>&1; then
 	(cd "$worktree_dir" && gt sync) || true
 fi
 
-codex exec \
+codex_bin="${CODEX_BIN:-}"
+if [[ -z "$codex_bin" ]]; then
+	codex_bin="$(command -v codex || true)"
+fi
+if [[ -z "$codex_bin" ]]; then
+	for candidate in "$HOME"/.local/bin/codex "$HOME"/.nvm/versions/node/*/bin/codex /opt/homebrew/bin/codex /usr/local/bin/codex; do
+		if [[ -x "$candidate" ]]; then
+			codex_bin="$candidate"
+			break
+		fi
+	done
+fi
+if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
+	echo "codex CLI not found. Install codex, set CODEX_BIN, or start Symphony with codex on PATH." >&2
+	echo "PATH=$PATH" >&2
+	exit 127
+fi
+
+"$codex_bin" exec \
 	--cd "$worktree_dir" \
 	--disable fast_mode \
 	--dangerously-bypass-approvals-and-sandbox \
