@@ -1109,6 +1109,10 @@ class SymphonyOrchestrator {
 		if (this.running.has(issue.id) || this.claimed.has(issue.id)) {
 			return false;
 		}
+		const activeBlockers = this.activeBlockers(issue);
+		if (activeBlockers.length > 1) {
+			return false;
+		}
 		const stackParent = this.stackParentFor(issue);
 		if (stackParent && !this.isStackParentReady(stackParent)) {
 			return false;

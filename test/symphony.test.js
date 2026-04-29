@@ -41,6 +41,15 @@ function writeWorkflow(dir, frontMatter, prompt = "Issue {{ issue.identifier }}:
 	return file;
 }
 
+function initGitRepo(dir) {
+	childProcess.execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+	childProcess.execFileSync("git", ["config", "user.email", "symphony@example.test"], { cwd: dir });
+	childProcess.execFileSync("git", ["config", "user.name", "Symphony Test"], { cwd: dir });
+	fs.writeFileSync(path.join(dir, "README.md"), "test\n");
+	childProcess.execFileSync("git", ["add", "README.md"], { cwd: dir });
+	childProcess.execFileSync("git", ["commit", "-m", "initial"], { cwd: dir, stdio: "ignore" });
+}
+
 test("loads workflow config, resolves secrets, and validates", () => {
 	const dir = tempDir();
 	try {
@@ -268,6 +277,93 @@ test("renders prompt variables strictly", () => {
 	assert.equal(renderPrompt("GitHub: {{ issue.recent_github_comments }}", { issue: { ...issue, recent_github_comments: "Address the review comment." } }), "GitHub: Address the review comment.");
 	assert.throws(() => renderPrompt("{{ issue.missing }}", { issue }), /unknown prompt variable/);
 	assert.throws(() => renderPrompt("{{ issue.title | upcase }}", { issue }), /unsupported prompt filter/);
+});
+
+test("allows a blocked issue to stack on exactly one available blocker branch", () => {
+	const dir = tempDir();
+	try {
+		initGitRepo(dir);
+		const config = {
+			tracker: { active_states: ["Todo", "In Progress"], terminal_states: ["Done"] },
+			repository: { root: dir, branch_prefix: "symphony" },
+			agent: { max_concurrent_agents: 1, max_concurrent_agents_by_state: {} }
+		};
+		const orchestrator = new SymphonyOrchestrator({ config, tracker: {}, runner: {}, workspaceManager: {}, logger: () => {} });
+		const blocker = normalizeIssue({ id: "1", identifier: "TASK-1", title: "Base change", state: { name: "In Progress" } });
+		const blocked = normalizeIssue({
+			id: "2",
+			identifier: "TASK-2",
+			title: "Dependent change",
+			state: { name: "Todo" },
+			blocked_by: [blocker]
+		});
+
+		assert.equal(orchestrator.isEligible(blocked), false);
+		childProcess.execFileSync("git", ["branch", "symphony-task-1"], { cwd: dir });
+
+		assert.deepEqual(orchestrator.stackParentFor(blocked), { issue: blocker, branch: "symphony-task-1" });
+		assert.equal(orchestrator.isEligible(blocked), true);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("keeps issues with multiple active blockers ineligible", () => {
+	const dir = tempDir();
+	try {
+		initGitRepo(dir);
+		const config = {
+			tracker: { active_states: ["Todo", "In Progress", "In Review"], terminal_states: ["Done"] },
+			repository: { root: dir, branch_prefix: "symphony" },
+			agent: { max_concurrent_agents: 1, max_concurrent_agents_by_state: {} }
+		};
+		const orchestrator = new SymphonyOrchestrator({ config, tracker: {}, runner: {}, workspaceManager: {}, logger: () => {} });
+		const firstBlocker = normalizeIssue({ id: "1", identifier: "TASK-1", title: "First base change", state: { name: "In Review" } });
+		const secondBlocker = normalizeIssue({ id: "2", identifier: "TASK-2", title: "Second base change", state: { name: "In Review" } });
+		const blocked = normalizeIssue({
+			id: "3",
+			identifier: "TASK-3",
+			title: "Fan-in integration",
+			state: { name: "Todo" },
+			blocked_by: [firstBlocker, secondBlocker]
+		});
+
+		childProcess.execFileSync("git", ["branch", "symphony-task-1"], { cwd: dir });
+
+		assert.deepEqual(orchestrator.stackParentFor(blocked), { issue: firstBlocker, branch: "symphony-task-1" });
+		assert.equal(orchestrator.isEligible(blocked), false);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("allows multi-blocked issues once all but one blocker are terminal", () => {
+	const dir = tempDir();
+	try {
+		initGitRepo(dir);
+		const config = {
+			tracker: { active_states: ["Todo", "In Progress"], terminal_states: ["Done"] },
+			repository: { root: dir, branch_prefix: "symphony" },
+			agent: { max_concurrent_agents: 1, max_concurrent_agents_by_state: {} }
+		};
+		const orchestrator = new SymphonyOrchestrator({ config, tracker: {}, runner: {}, workspaceManager: {}, logger: () => {} });
+		const remainingBlocker = normalizeIssue({ id: "1", identifier: "TASK-1", title: "Remaining base change", state: { name: "In Progress" } });
+		const doneBlocker = normalizeIssue({ id: "2", identifier: "TASK-2", title: "Merged base change", state: { name: "Done" } });
+		const blocked = normalizeIssue({
+			id: "3",
+			identifier: "TASK-3",
+			title: "Final integration",
+			state: { name: "Todo" },
+			blocked_by: [remainingBlocker, doneBlocker]
+		});
+
+		childProcess.execFileSync("git", ["branch", "symphony-task-1"], { cwd: dir });
+
+		assert.deepEqual(orchestrator.stackParentFor(blocked), { issue: remainingBlocker, branch: "symphony-task-1" });
+		assert.equal(orchestrator.isEligible(blocked), true);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("selects non-workpad Linear comments added after the latest workpad update", () => {
