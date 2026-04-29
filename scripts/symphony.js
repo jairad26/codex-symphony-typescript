@@ -388,6 +388,30 @@ function normalizeIssue(issue) {
 	};
 }
 
+function branchSlugForIssueIdentifier(identifier) {
+	return String(identifier || "symphony-issue")
+		.toLowerCase()
+		.replace(/[^a-z0-9._-]+/g, "-")
+		.replace(/-+$/g, "");
+}
+
+function branchNameForIssue(config, identifier) {
+	const branchPrefix = config.repository?.branch_prefix || DEFAULTS.repository.branch_prefix;
+	return `${branchPrefix}-${branchSlugForIssueIdentifier(identifier)}`;
+}
+
+function gitBranchExists(repoRoot, branchName) {
+	if (!repoRoot || !branchName) {
+		return false;
+	}
+	try {
+		childProcess.execFileSync("git", ["-C", repoRoot, "show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], { stdio: "ignore" });
+		return true;
+	} catch (_error) {
+		return false;
+	}
+}
+
 function normalizeIssueComment(comment) {
 	const author = comment.user || comment.author || null;
 	return {
@@ -911,6 +935,8 @@ class AgentRunner {
 					SYMPHONY_ISSUE_ID: issue.id,
 					SYMPHONY_ISSUE_IDENTIFIER: issue.identifier,
 					SYMPHONY_WORKPAD_COMMENT_ID: issue.workpad_comment_id || "",
+					SYMPHONY_STACK_PARENT_ISSUE_IDENTIFIER: issue.stack_parent?.issue?.identifier || "",
+					SYMPHONY_STACK_PARENT_BRANCH: issue.stack_parent?.branch || "",
 					SYMPHONY_LINEAR_ENDPOINT: this.config.tracker.endpoint || DEFAULTS.tracker.endpoint,
 					SYMPHONY_LINEAR_IN_REVIEW_STATE_ID: this.config.tracker.state_transitions?.on_pr_open_state_id || "",
 					LINEAR_API_KEY: this.config.tracker.api_key || process.env.LINEAR_API_KEY || "",
@@ -1083,10 +1109,31 @@ class SymphonyOrchestrator {
 		if (this.running.has(issue.id) || this.claimed.has(issue.id)) {
 			return false;
 		}
-		if (issue.state === "Todo" && issue.blocked_by.some((blocker) => !this.isTerminalState(blocker.state))) {
+		const stackParent = this.stackParentFor(issue);
+		if (stackParent && !this.isStackParentReady(stackParent)) {
 			return false;
 		}
 		return true;
+	}
+
+	activeBlockers(issue) {
+		return (issue.blocked_by || []).filter((blocker) => !this.isTerminalState(blocker.state));
+	}
+
+	stackParentFor(issue) {
+		const [blocker] = this.activeBlockers(issue);
+		if (!blocker?.identifier) {
+			return null;
+		}
+		return {
+			issue: blocker,
+			branch: branchNameForIssue(this.config, blocker.identifier)
+		};
+	}
+
+	isStackParentReady(stackParent) {
+		const runningParent = [...this.running.values()].some((entry) => entry.issue.id === stackParent.issue.id);
+		return !runningParent && gitBranchExists(this.config.repository.root, stackParent.branch);
 	}
 
 	availableGlobalSlots() {
@@ -1303,7 +1350,11 @@ query($owner: String!, $repo: String!, $number: Int!) {
 
 	async dispatchIssue(issue, attempt = null) {
 		this.claimed.add(issue.id);
+		const stackParent = this.stackParentFor(issue);
 		issue = await this.transitionIssueState(issue, "on_dispatch", this.config.tracker.state_transitions?.on_dispatch_state_id);
+		if (stackParent) {
+			issue = { ...issue, stack_parent: stackParent };
+		}
 		issue = await this.attachPromptComments(issue);
 		const startedAt = this.now();
 		const runningEntry = {

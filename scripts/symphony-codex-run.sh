@@ -10,6 +10,7 @@ repo_root="${SYMPHONY_TARGET_REPO_ROOT:-${SYMPHONY_REPO_ROOT:-}}"
 base_branch="${SYMPHONY_BASE_BRANCH:-main}"
 branch_prefix="${SYMPHONY_BRANCH_PREFIX:-symphony}"
 repo_env_file="${SYMPHONY_REPO_ENV_FILE:-.env.local}"
+stack_parent_branch="${SYMPHONY_STACK_PARENT_BRANCH:-}"
 
 if [[ -z "$repo_root" || ! -d "$repo_root/.git" ]]; then
 	echo "SYMPHONY_TARGET_REPO_ROOT must point to the target git repository" >&2
@@ -23,11 +24,19 @@ worktree_dir="$PWD/repo"
 output_file="$PWD/codex-last-message.md"
 
 git -C "$repo_root" fetch origin "$base_branch" --quiet
+parent_ref="origin/$base_branch"
+if [[ -n "$stack_parent_branch" ]]; then
+	if ! git -C "$repo_root" show-ref --verify --quiet "refs/heads/$stack_parent_branch"; then
+		echo "Stack parent branch '$stack_parent_branch' is not available locally yet" >&2
+		exit 75
+	fi
+	parent_ref="$stack_parent_branch"
+fi
 
 if [[ ! -e "$worktree_dir/.git" ]]; then
 	git -C "$repo_root" worktree prune >/dev/null
 	if ! git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch_name"; then
-		git -C "$repo_root" branch "$branch_name" "origin/$base_branch"
+		git -C "$repo_root" branch "$branch_name" "$parent_ref"
 	fi
 	git -C "$repo_root" worktree add "$worktree_dir" "$branch_name"
 fi
@@ -42,6 +51,9 @@ fi
 
 if command -v gt >/dev/null 2>&1; then
 	(cd "$worktree_dir" && gt sync) || true
+	if [[ -n "$stack_parent_branch" ]]; then
+		(cd "$worktree_dir" && gt track --parent "$stack_parent_branch" --no-interactive) || true
+	fi
 fi
 
 codex_bin="${CODEX_BIN:-}"

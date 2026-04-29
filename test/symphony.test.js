@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -9,6 +10,7 @@ const test = require("node:test");
 const {
 	AgentRunner,
 	LinearTracker,
+	SymphonyOrchestrator,
 	WorkspaceManager,
 	createAgentAdapter,
 	estimateTokenUsageFromText,
@@ -342,6 +344,40 @@ test("keeps workspaces inside the workspace root", () => {
 
 		assert.ok(workspace.path.startsWith(dir));
 		assert.equal(path.basename(workspace.path), ".._TASK_1_");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("allows blocked issues to stack on an available blocker branch", () => {
+	const dir = tempDir();
+	try {
+		childProcess.execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+		childProcess.execFileSync("git", ["config", "user.email", "symphony@example.test"], { cwd: dir });
+		childProcess.execFileSync("git", ["config", "user.name", "Symphony Test"], { cwd: dir });
+		fs.writeFileSync(path.join(dir, "README.md"), "test\n");
+		childProcess.execFileSync("git", ["add", "README.md"], { cwd: dir });
+		childProcess.execFileSync("git", ["commit", "-m", "initial"], { cwd: dir, stdio: "ignore" });
+
+		const config = {
+			tracker: { active_states: ["Todo", "In Progress"], terminal_states: ["Done"] },
+			repository: { root: dir, branch_prefix: "symphony" }
+		};
+		const orchestrator = new SymphonyOrchestrator({ config, tracker: {}, runner: {}, workspaceManager: {}, logger: () => {} });
+		const blocker = normalizeIssue({ id: "1", identifier: "TASK-1", title: "Base change", state: { name: "In Progress" } });
+		const blocked = normalizeIssue({
+			id: "2",
+			identifier: "TASK-2",
+			title: "Dependent change",
+			state: { name: "Todo" },
+			blocked_by: [blocker]
+		});
+
+		assert.equal(orchestrator.isEligible(blocked), false);
+		childProcess.execFileSync("git", ["branch", "symphony-task-1"], { cwd: dir });
+
+		assert.deepEqual(orchestrator.stackParentFor(blocked), { issue: blocker, branch: "symphony-task-1" });
+		assert.equal(orchestrator.isEligible(blocked), true);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
