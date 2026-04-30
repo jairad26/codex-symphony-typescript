@@ -411,7 +411,7 @@ test("keeps multi-blocked issues ineligible until every blocker is terminal", ()
 	}
 });
 
-test("allows blocked issues once all blockers are terminal", () => {
+test("allows issues once all blockers are terminal while keeping the stack parent branch", () => {
 	const config = {
 		tracker: { active_states: ["Todo", "In Progress"], terminal_states: ["Done"] },
 		repository: { root: process.cwd(), branch_prefix: "symphony" },
@@ -427,7 +427,7 @@ test("allows blocked issues once all blockers are terminal", () => {
 		blocked_by: [doneBlocker]
 	});
 
-	assert.equal(orchestrator.stackParentFor(blocked), null);
+	assert.deepEqual(orchestrator.stackParentFor(blocked), { issue: doneBlocker, branch: "symphony-task-1" });
 	assert.equal(orchestrator.isEligible(blocked), true);
 });
 

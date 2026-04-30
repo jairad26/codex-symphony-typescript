@@ -1177,7 +1177,7 @@ class SymphonyOrchestrator {
 	}
 
 	stackParentFor(issue) {
-		const [blocker] = this.activeBlockers(issue);
+		const [blocker] = issue.blocked_by || [];
 		if (!blocker?.identifier) {
 			return null;
 		}
